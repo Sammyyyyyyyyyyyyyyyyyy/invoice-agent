@@ -115,7 +115,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tag.urgent { background: var(--bad); color: #fff; }
 .check .tags { margin-top: 5px; }
 
-.decision { border-radius: 9px; padding: 14px; margin-top: 4px; border: 1px solid; }
+.decision { border-radius: 9px; padding: 14px; margin: 0 0 16px; border: 1px solid; }
 .decision.Approve { background: var(--ok-tint); border-color: #b9dcc6; }
 .decision.Review { background: var(--hold-tint); border-color: #eed3a6; }
 .decision.Reject { background: var(--bad-tint); border-color: #f1c0ba; }
@@ -123,7 +123,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .decision h3 { margin: 0 0 6px; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .decision .why { white-space: pre-wrap; color: var(--ink); font-size: 13px; margin-top: 8px; }
 .decision .next { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,.08); font-size: 13px; }
-.err { background: var(--bad-tint); color: var(--bad); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.err { margin-bottom: 16px; background: var(--bad-tint); color: var(--bad); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
 .note { color: var(--ink-3); font-size: 12.5px; margin-top: 3px; }
 
 /* ---------- invoices list ---------- */
@@ -203,3 +203,16 @@ td.num, th.num { text-align: right; }
 .pick-arrow { font-size: 34px; line-height: 1; margin-bottom: 10px; color: #fff; }
 .doc-empty b { color: #fff; font-size: 16px; }
 .empty b { color: var(--ink); }
+
+/* decision card */
+.decision { padding: 0; overflow: hidden; }
+.d-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid rgba(0,0,0,.07); }
+.d-head .status { font-size: 15px; }
+.d-head .status i { width: 10px; height: 10px; }
+.d-rows { margin: 0; padding: 4px 14px 10px; }
+.d-rows > div { display: grid; grid-template-columns: 118px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); }
+.d-rows > div:last-child { border-bottom: 0; }
+.d-rows dt { color: var(--ink-2); font-size: 12.5px; font-weight: 600; }
+.d-rows dd { margin: 0; font-size: 13px; color: var(--ink); }
+.d-rows .tags { margin: 0; }
+.d-next dd { font-weight: 500; }

@@ -63,6 +63,9 @@ export default function Home() {
   const [view, setView] = useState<"process" | "invoices" | "data">("process");
   const [runs, setRuns] = useState<Run[]>([]);
   const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
+  const [session, setSession] = useState(0);
 
   const refresh = useCallback(async () => {
     const r = await fetch("/api/runs").then((x) => x.json()).catch(() => ({ runs: [] }));
@@ -71,11 +74,14 @@ export default function Home() {
   useEffect(() => { refresh(); }, [refresh]);
 
   async function reset() {
-    if (!window.confirm("Reset demo data? This clears processed invoices and restores vendors, POs and history.")) return;
+    setConfirmReset(false);
     setResetting(true);
     await fetch("/api/reset", { method: "POST" });
     await refresh();
     setResetting(false);
+    setSession((n) => n + 1); // clears the current run so you start fresh
+    setView("process");
+    setResetDone(true);
   }
 
   const live = runs.filter((r) => !r.seeded);
@@ -102,18 +108,50 @@ export default function Home() {
         </nav>
         <div className="side-foot">
           <p>Demo company with 5 vendors and 9 purchase orders.</p>
-          <button onClick={reset} disabled={resetting}>{resetting ? "Resetting…" : "Reset demo data"}</button>
+          <button onClick={() => setConfirmReset(true)} disabled={resetting}>{resetting ? "Resetting…" : "Reset demo data"}</button>
         </div>
       </aside>
       <div className="main">
         <header className="pagehead"><h1>{heads[0]}</h1><p>{heads[1]}</p></header>
         <div className="content">
-          {view === "process" && <Process onDone={refresh} />}
+          {view === "process" && <Process key={session} onDone={refresh} />}
           {view === "invoices" && <Invoices runs={runs} />}
           {view === "data" && <RefData />}
         </div>
       </div>
+      {confirmReset && (
+        <Modal onClose={() => setConfirmReset(false)}>
+          <h2>Reset demo data?</h2>
+          <p>This clears every processed invoice and restores the vendor list, purchase orders and past history to their starting state.</p>
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setConfirmReset(false)}>Cancel</button>
+            <button className="btn primary" onClick={reset}>Reset demo data</button>
+          </div>
+        </Modal>
+      )}
+      {resetDone && (
+        <Modal onClose={() => setResetDone(false)}>
+          <div className="modal-ok">✓</div>
+          <h2>Demo data reset</h2>
+          <p>All invoices cleared. 5 vendors and 9 purchase orders are back to their starting state. Pick an invoice to check.</p>
+          <div className="modal-actions"><button className="btn primary" onClick={() => setResetDone(false)}>Done</button></div>
+        </Modal>
+      )}
     </div>
+  );
+}
+
+function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return (
+    <>
+      <div className="scrim" onClick={onClose} />
+      <div className="modal" role="dialog" aria-modal="true">{children}</div>
+    </>
   );
 }
 
@@ -214,7 +252,7 @@ function Process({ onDone }: { onDone: () => void }) {
         </div>
         <div className="pane-b">
           {!live ? (
-            <div className="empty">Pick an invoice to watch each check run.</div>
+            <div className="empty"><b>No invoice selected</b><br />Choose one on the left and each check will run here, step by step.</div>
           ) : (
             <>
               {live.extracted && <Fields ex={live.extracted} />}
@@ -250,7 +288,7 @@ function Doc({ url, isImage, run, name }: { url?: string; isImage?: boolean; run
   if (!url) {
     return (
       <div className="doc-empty">
-        <div><b>No invoice open</b><p>Upload a bill or pick a test invoice. It will show here next to the checks, so you can compare.</p></div>
+        <div><div className="pick-arrow" aria-hidden>←</div><b>Select an invoice to check</b><p>Pick one of the test invoices on the left, or upload your own. It opens here next to the checks so you can compare.</p></div>
       </div>
     );
   }

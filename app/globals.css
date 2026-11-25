@@ -34,7 +34,7 @@ main { padding: 24px 28px; max-width: 1320px; margin: 0 auto; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
 .panel h2 { margin: 0 0 4px; font-size: 15px; }
 .panel .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
-.drop { border: 2px dashed #c9cfda; border-radius: var(--radius); padding: 26px 14px; text-align: center; color: var(--muted); transition: .15s; }
+.drop { display: block; cursor: pointer; border: 2px dashed #c9cfda; border-radius: var(--radius); padding: 26px 14px; text-align: center; color: var(--muted); transition: .15s; }
 .drop.over { border-color: var(--brand); background: #f3f4fe; color: var(--brand); }
 .drop strong { color: var(--ink); display: block; margin-bottom: 4px; }
 .samples { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; }

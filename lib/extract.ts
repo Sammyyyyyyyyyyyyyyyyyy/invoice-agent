@@ -43,7 +43,7 @@ export async function extractInvoice(file: Buffer, mimeType: string): Promise<Ex
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
   const ai = new GoogleGenAI({ apiKey });
   const res = await ai.models.generateContent({
-    model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
     contents: [{ role: "user", parts: [{ inlineData: { mimeType, data: file.toString("base64") } }, { text: PROMPT }] }],
     config: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0 },
   });

@@ -1,5 +1,5 @@
 // POST an invoice file → streams each stage as it happens (one JSON object per line).
-import { addToPo, loadContext, saveRun } from "@/lib/db";
+import { addToPo, loadContext, saveFile, saveRun } from "@/lib/db";
 import { extractInvoice } from "@/lib/extract";
 import { evaluate, STAGE_LABELS } from "@/lib/rules";
 
@@ -12,6 +12,8 @@ export async function POST(req: Request) {
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return Response.json({ error: "No file uploaded" }, { status: 400 });
+  const name = String(form.get("name") || file.name).trim() || file.name;
+  const isSample = form.get("sample") === "1";
   const buf = Buffer.from(await file.arrayBuffer());
   const mime = file.type || "application/pdf";
 
@@ -36,7 +38,7 @@ export async function POST(req: Request) {
         }
 
         const run = await saveRun({
-          file_name: file.name,
+          file_name: name,
           vendor_id: out.vendor?.id ?? null,
           vendor_name: out.vendor?.name ?? extracted.vendor_name,
           invoice_number: extracted.invoice_number,
@@ -55,6 +57,8 @@ export async function POST(req: Request) {
           extracted,
           seeded: false,
         });
+        // Keep a copy of uploaded files so they can be reopened from the Invoices page.
+        if (!isSample) await saveFile(run.id, buf, mime).catch(() => {});
         // Only approved invoices use up the PO's balance.
         if (out.decision === "Approve" && out.po && out.poCharge > 0) await addToPo(out.po.id, out.poCharge);
 

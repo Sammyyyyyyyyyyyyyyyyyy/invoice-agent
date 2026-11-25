@@ -53,10 +53,37 @@ export async function addToPo(poId: string, amount: number) {
 
 export async function resetDemo() {
   const db = client();
+  await clearFiles().catch(() => {});
   must(await db.from("runs").delete().not("id", "is", null).select("id"));
   must(await db.from("purchase_orders").delete().not("id", "is", null).select("id"));
   must(await db.from("vendors").delete().not("id", "is", null).select("id"));
   must(await db.from("vendors").insert(SEED_VENDORS).select("id"));
   must(await db.from("purchase_orders").insert(SEED_POS).select("id"));
   must(await db.from("runs").insert(SEED_RUNS).select("id"));
+}
+
+// ---- Uploaded invoice files (Supabase Storage, private bucket) ----
+const BUCKET = "invoices";
+
+async function ensureBucket() {
+  const db = client();
+  const { data } = await db.storage.getBucket(BUCKET);
+  if (!data) await db.storage.createBucket(BUCKET, { public: false });
+}
+
+export async function saveFile(runId: string, buf: Buffer, contentType: string) {
+  await ensureBucket();
+  const { error } = await client().storage.from(BUCKET).upload(runId, buf, { contentType, upsert: true });
+  if (error) throw new Error(error.message);
+}
+
+export async function fileUrl(runId: string): Promise<string | null> {
+  const { data } = await client().storage.from(BUCKET).createSignedUrl(runId, 60 * 60);
+  return data?.signedUrl ?? null;
+}
+
+export async function clearFiles() {
+  const db = client();
+  const { data } = await db.storage.from(BUCKET).list("", { limit: 1000 });
+  if (data?.length) await db.storage.from(BUCKET).remove(data.map((f) => f.name));
 }

@@ -71,7 +71,7 @@ export default function Home() {
 }
 
 // ---------------- LIVE RUN VIEW ----------------
-type Live = { status: Record<string, string>; results: Record<string, StageResult>; extracted: Extracted | null; run: Run | null; error: string | null; file: string };
+type Live = { note: string | null; model: string | null; ms: number | null; status: Record<string, string>; results: Record<string, StageResult>; extracted: Extracted | null; run: Run | null; error: string | null; file: string };
 
 function Process({ onDone }: { onDone: () => void }) {
   const [live, setLive] = useState<Live | null>(null);
@@ -80,7 +80,7 @@ function Process({ onDone }: { onDone: () => void }) {
 
   async function process(file: File) {
     setBusy(true);
-    setLive({ status: {}, results: {}, extracted: null, run: null, error: null, file: file.name });
+    setLive({ note: null, model: null, ms: null, status: {}, results: {}, extracted: null, run: null, error: null, file: file.name });
     const fd = new FormData();
     fd.append("file", file);
     try {
@@ -102,7 +102,8 @@ function Process({ onDone }: { onDone: () => void }) {
             if (!l) return l;
             const n = { ...l, status: { ...l.status }, results: { ...l.results } };
             if (ev.type === "running") n.status[ev.key] = "running";
-            if (ev.type === "extracted") n.extracted = ev.extracted;
+            if (ev.type === "extracted") { n.extracted = ev.extracted; n.model = ev.model; n.ms = ev.ms; n.note = null; }
+            if (ev.type === "note") n.note = ev.message;
             if (ev.type === "stage") { n.status[ev.stage.key] = ev.stage.status; n.results[ev.stage.key] = ev.stage; }
             if (ev.type === "done") n.run = ev.run;
             if (ev.type === "error") n.error = ev.message;
@@ -161,6 +162,8 @@ function Process({ onDone }: { onDone: () => void }) {
                     <div className={"dot " + (st ?? "")}>{icon(st ?? "") || "·"}</div>
                     <div>
                       <div className="title">{label}{st && <span className="t-status">{statusWord(st)}</span>}</div>
+                      {key === "read" && live.note && !ex && <div className="detail muted">{live.note}</div>}
+                      {key === "read" && live.model && <div className="detail muted" style={{ fontSize: 12 }}>Read by {live.model} in {((live.ms ?? 0) / 1000).toFixed(1)}s</div>}
                       {key === "read" && ex && (
                         <div className="kv">
                           <div><span>Vendor</span><b>{ex.vendor_name ?? "—"}</b></div>

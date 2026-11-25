@@ -22,8 +22,8 @@ export async function POST(req: Request) {
         // 1. AI reads the invoice
         send({ type: "running", key: "read", label: STAGE_LABELS.read });
         const t0 = Date.now();
-        const [extracted, ctx] = await Promise.all([extractInvoice(buf, mime), loadContext()]);
-        send({ type: "extracted", extracted, ms: Date.now() - t0 });
+        const [extracted, ctx] = await Promise.all([extractInvoice(buf, mime, (message) => send({ type: "note", message })), loadContext()]);
+        send({ type: "extracted", extracted, model: extracted.model, ms: Date.now() - t0 });
 
         // 2–8. Rules decide (instant), streamed one by one so the reviewer can follow along
         const out = evaluate(extracted, ctx);

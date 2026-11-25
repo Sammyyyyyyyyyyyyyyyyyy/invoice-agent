@@ -38,16 +38,42 @@ Rules:
 - If a field is not on the invoice, return null. Do NOT invent or infer values — especially the PO number.
 - The buyer is "Acme Retail Pvt Ltd"; vendor_name is the OTHER company (the one asking to be paid).`;
 
-export async function extractInvoice(file: Buffer, mimeType: string): Promise<Extracted> {
+// If the main model is busy or unavailable, fall back to the next one so a live run doesn't fail.
+const MODELS = () =>
+  [process.env.GEMINI_MODEL, "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest"]
+    .filter((m, i, a): m is string => !!m && a.indexOf(m) === i);
+
+export async function extractInvoice(file: Buffer, mimeType: string, onRetry?: (msg: string) => void): Promise<Extracted & { model: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
   const ai = new GoogleGenAI({ apiKey });
-  const res = await ai.models.generateContent({
-    model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
-    contents: [{ role: "user", parts: [{ inlineData: { mimeType, data: file.toString("base64") } }, { text: PROMPT }] }],
-    config: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0 },
-  });
-  const raw = JSON.parse(res.text ?? "{}");
+  let lastErr: unknown;
+  for (const model of MODELS()) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await ai.models.generateContent({
+          model,
+          contents: [{ role: "user", parts: [{ inlineData: { mimeType, data: file.toString("base64") } }, { text: PROMPT }] }],
+          config: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0 },
+        });
+        return { ...parse(res.text ?? "{}"), model };
+      } catch (e: any) {
+        lastErr = e;
+        const msg = String(e?.message ?? e);
+        const busy = /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED/i.test(msg);
+        const gone = /404|NOT_FOUND|no longer available/i.test(msg);
+        if (!busy && !gone) throw e;
+        if (busy && attempt === 0) { onRetry?.(`AI model ${model} is busy — retrying…`); await new Promise((r) => setTimeout(r, 1500)); continue; }
+        onRetry?.(`AI model ${model} unavailable — switching to a backup model…`);
+        break;
+      }
+    }
+  }
+  throw lastErr;
+}
+
+function parse(text: string): Extracted {
+  const raw = JSON.parse(text);
   return {
     vendor_name: raw.vendor_name ?? null,
     vendor_gstin: raw.vendor_gstin ?? null,

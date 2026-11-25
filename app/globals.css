@@ -216,3 +216,16 @@ td.num, th.num { text-align: right; }
 .d-rows dd { margin: 0; font-size: 13px; color: var(--ink); }
 .d-rows .tags { margin: 0; }
 .d-next dd { font-weight: 500; }
+
+/* "checks passed" info popover */
+.with-info { display: flex; align-items: center; gap: 6px; }
+.info { position: relative; display: inline-flex; }
+.info-btn { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--ink-3); background: none; color: var(--ink-2); font-size: 11px; font-weight: 700; font-style: italic; font-family: Georgia, serif; line-height: 1; display: grid; place-items: center; padding: 0; }
+.info-btn:hover, .info-btn[aria-expanded="true"] { border-color: var(--ledger); color: #fff; background: var(--ledger); }
+.info-pop { position: absolute; right: -8px; top: 26px; z-index: 10; width: 300px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(18,48,42,.18); padding: 12px; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.info-pop > b { font-size: 13px; }
+.info-row { display: grid; grid-template-columns: 18px 1fr; gap: 8px; font-size: 12.5px; color: var(--ink-2); line-height: 1.4; }
+.info-row b { display: block; color: var(--ink); font-weight: 600; font-size: 12.5px; }
+.mini { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 800; font-style: normal; background: var(--ok); color: #fff; }
+.mini.warn { background: var(--hold); } .mini.fail { background: var(--bad); } .mini.skip { background: var(--line); }
+.decision { overflow: visible; }

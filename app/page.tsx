@@ -319,6 +319,26 @@ function Fields({ ex }: { ex: Extracted }) {
   );
 }
 
+function InfoChecks({ stages }: { stages: StageResult[] }) {
+  const [hover, setHover] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const open = hover || pinned;
+  const list = stages.filter((x) => x.key !== "decision");
+  return (
+    <span className="info" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button type="button" className="info-btn" aria-label="Show checks passed" aria-expanded={open} onClick={() => setPinned((o) => !o)} onBlur={() => setPinned(false)}>i</button>
+      {open && (
+        <span className="info-pop" role="tooltip">
+          <b>{list.filter((x) => x.status === "pass").length} of {list.length} checks passed</b>
+          {list.map((x) => (
+            <span key={x.key} className="info-row"><i className={"mini " + x.status}>{icon(x.status)}</i><span><b>{x.label}</b>{x.summary}</span></span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Decision({ run }: { run: Run }) {
   const stages = run.stages ?? [];
   const get = (k: string) => stages.find((x) => x.key === k);
@@ -336,7 +356,7 @@ function Decision({ run }: { run: Run }) {
           <>
             {get("po") && <div><dt>Purchase order</dt><dd>{get("po")!.summary}</dd></div>}
             {get("match") && <div><dt>Amount</dt><dd>{get("match")!.summary}</dd></div>}
-            <div><dt>Checks</dt><dd>All checks passed.</dd></div>
+            <div><dt>Checks</dt><dd className="with-info">All checks passed. <InfoChecks stages={stages} /></dd></div>
           </>
         )}
         {run.decision === "Review" && issues.map((x) => (

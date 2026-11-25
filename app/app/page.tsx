@@ -575,7 +575,10 @@ function Invoices({ runs: all, names, rename, onChanged }: { runs: Run[]; onChan
           ))}
         </div>
         <div className="tagfilter">
-          {tags.map((t) => <button key={t} className={tag === t ? "on" : ""} onClick={() => setTag(tag === t ? null : t)}>{t}</button>)}
+          {tags.map((t) => {
+            const n = all.filter((r) => r.tags.includes(t) && isUnread(r)).length;
+            return <button key={t} className={tag === t ? "on" : ""} onClick={() => setTag(tag === t ? null : t)}>{t}{n > 0 && <span className="unread" aria-label={`${n} unread`} title={`${n} unread`} />}</button>;
+          })}
         </div>
         <label className="toggle"><input type="checkbox" checked={history} onChange={(e) => setHistory(e.target.checked)} /> Show earlier history</label>
       </div>

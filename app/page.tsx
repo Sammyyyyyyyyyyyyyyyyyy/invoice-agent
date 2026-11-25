@@ -3,35 +3,64 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Extracted, PurchaseOrder, Run, StageResult, Vendor } from "@/lib/types";
 
 const STAGES: [StageResult["key"], string][] = [
-  ["read", "Read invoice"], ["vendor", "Check vendor"], ["duplicate", "Check duplicates"], ["tax", "Check the maths"],
-  ["po", "Find purchase order"], ["match", "Match amount to PO"], ["pattern", "Check vendor history"], ["decision", "Decision"],
+  ["read", "Read invoice"], ["vendor", "Check vendor"], ["duplicate", "Check for duplicates"], ["tax", "Check the maths"],
+  ["po", "Find purchase order"], ["match", "Match amount to PO"], ["pattern", "Check vendor history"],
 ];
 
-const SAMPLES = [
-  { f: "01_happy_dell_laptops.pdf", n: "Dell — laptops", h: "Happy path · ₹300 over PO" },
-  { f: "02_split_A_urbanladder.pdf", n: "Urban Ladder — invoice 1 of 3", h: "Split PO · part bill" },
-  { f: "03_split_B_urbanladder.pdf", n: "Urban Ladder — invoice 2 of 3", h: "Split PO · uses up the rest" },
-  { f: "04_split_C_urbanladder.pdf", n: "Urban Ladder — invoice 3 of 3", h: "Split PO · nothing left" },
-  { f: "05_scanned_no_po_quickoffice.pdf", n: "Quick Office — scanned", h: "Scan · no PO number" },
-  { f: "06_bank_changed_aws.pdf", n: "AWS — cloud bill", h: "Bank account changed" },
-  { f: "07_vendor_creep_swift.pdf", n: "Swift Logistics — freight", h: "Small overcharge, 4th time" },
-  { f: "08_duplicate_dell_laptops.pdf", n: "Dell — laptops (again)", h: "Built-in: duplicate" },
-  { f: "09_tax_wrong_dell_monitors.pdf", n: "Dell — monitors", h: "Built-in: tax maths wrong" },
-  { f: "10_invalid_vendor_zenith.pdf", n: "Zenith Traders", h: "Unknown vendor" },
+const SAMPLE_GROUPS: { title: string; items: { f: string; n: string; h: string }[] }[] = [
+  { title: "Happy path", items: [{ f: "01_happy_dell_laptops.pdf", n: "Dell India", h: "Laptops, ₹300 over PO" }] },
+  {
+    title: "Edge cases",
+    items: [
+      { f: "02_split_A_urbanladder.pdf", n: "Urban Ladder (1 of 3)", h: "First part of a split order" },
+      { f: "03_split_B_urbanladder.pdf", n: "Urban Ladder (2 of 3)", h: "Uses up the rest of the PO" },
+      { f: "04_split_C_urbanladder.pdf", n: "Urban Ladder (3 of 3)", h: "Nothing left on the PO" },
+      { f: "05_scanned_no_po_quickoffice.pdf", n: "Quick Office Supplies", h: "Scanned, no PO number" },
+      { f: "06_bank_changed_aws.pdf", n: "Amazon Web Services", h: "Asks to pay a new bank account" },
+      { f: "07_vendor_creep_swift.pdf", n: "Swift Logistics", h: "4th small overcharge in a row" },
+    ],
+  },
+  {
+    title: "Built-in checks",
+    items: [
+      { f: "08_duplicate_dell_laptops.pdf", n: "Dell India (again)", h: "Same invoice sent twice" },
+      { f: "09_tax_wrong_dell_monitors.pdf", n: "Dell India", h: "Monitors, total doesn't add up" },
+      { f: "10_invalid_vendor_zenith.pdf", n: "Zenith Traders", h: "Not an approved vendor" },
+    ],
+  },
 ];
+const SAMPLE_FILES = new Set(SAMPLE_GROUPS.flatMap((g) => g.items.map((i) => i.f)));
 
 const inr = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
-const icon = (s: string) => ({ pass: "✓", warn: "!", fail: "✕", skip: "–", running: "…" } as Record<string, string>)[s] ?? "";
-const statusWord = (s: string) => ({ pass: "passed", warn: "needs attention", fail: "failed", skip: "skipped", running: "running" } as Record<string, string>)[s] ?? "";
+const icon = (s?: string) => ({ pass: "✓", warn: "!", fail: "✕", skip: "", running: "" } as Record<string, string>)[s ?? ""] ?? "";
 const REJECT_TAGS = ["Invalid vendor", "Duplicate invoice"];
+const STAMP = { Approve: ["APPROVED", "for payment"], Review: ["ON HOLD", "needs review"], Reject: ["REJECTED", "do not pay"] } as const;
+const TITLE = { Approve: "Approved for payment", Review: "Needs review", Reject: "Rejected" } as const;
+const NEXT: Record<string, string> = {
+  Approve: "Queue for the next payment run. No action needed.",
+  Reject: "Don't pay. Reply to the sender if needed.",
+  "Bank changed": "Call the vendor on a number you already have (not one from this invoice) to confirm the new account.",
+  "Review calc": "Ask the vendor for a corrected invoice.",
+  "PO issues": "Confirm which PO this belongs to, or ask the vendor to add the PO number.",
+  "PO used": "Check with the buyer whether this was extra work, and raise a new PO if so.",
+  "Amount mismatch": "Ask the buyer whether the extra amount was agreed.",
+  "Vendor creep": "Raise the pattern with the vendor before paying.",
+  "Missing info": "Ask the vendor to resend a complete invoice.",
+};
+const when = (s: string) => new Date(s).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 function Tags({ tags, high }: { tags: string[]; high?: boolean }) {
-  return <>{tags.map((t) => <span key={t} className={"tag " + (t === "Bank changed" && high ? "hi" : REJECT_TAGS.includes(t) ? "bad" : "")}>{t}</span>)}</>;
+  if (!tags.length) return null;
+  return (
+    <div className="tags">
+      {tags.map((t) => <span key={t} className={"tag" + (t === "Bank changed" && high ? " urgent" : REJECT_TAGS.includes(t) ? " bad" : "")}>{t}</span>)}
+    </div>
+  );
 }
 
 export default function Home() {
-  const [tab, setTab] = useState<"process" | "dashboard" | "data">("process");
+  const [view, setView] = useState<"process" | "invoices" | "data">("process");
   const [runs, setRuns] = useState<Run[]>([]);
   const [resetting, setResetting] = useState(false);
 
@@ -42,50 +71,76 @@ export default function Home() {
   useEffect(() => { refresh(); }, [refresh]);
 
   async function reset() {
-    if (!window.confirm("Reset demo data? This clears all runs and restores the vendor list, POs and history.")) return;
+    if (!window.confirm("Reset demo data? This clears processed invoices and restores vendors, POs and history.")) return;
     setResetting(true);
     await fetch("/api/reset", { method: "POST" });
     await refresh();
     setResetting(false);
   }
 
+  const live = runs.filter((r) => !r.seeded);
+  const onHold = live.filter((r) => r.decision === "Review").length;
+  const heads = {
+    process: ["Process an invoice", "Upload a bill. AI reads it, your rules decide."],
+    invoices: ["Invoices", "Everything processed, with the reason for each decision."],
+    data: ["Vendors, POs & rules", "The records every invoice is checked against."],
+  }[view];
+
   return (
-    <>
-      <div className="topbar">
-        <div className="logo">🧾 Invoice Agent <small>· Acme Retail · Accounts Payable</small></div>
-        <div className="tabs">
-          <button className={"tab" + (tab === "process" ? " active" : "")} onClick={() => setTab("process")}>Process invoice</button>
-          <button className={"tab" + (tab === "dashboard" ? " active" : "")} onClick={() => { setTab("dashboard"); refresh(); }}>Dashboard ({runs.filter((r) => !r.seeded).length})</button>
-          <button className={"tab" + (tab === "data" ? " active" : "")} onClick={() => setTab("data")}>Vendors, POs &amp; rules</button>
+    <div className="shell">
+      <aside className="side">
+        <div className="brand">
+          <div className="brand-mark">A</div>
+          <div><b>Invoice Agent</b><span>Acme Retail · Payables</span></div>
         </div>
-        <div className="spacer" />
-        <button className="btn" onClick={reset} disabled={resetting}>{resetting ? "Resetting…" : "↺ Reset demo data"}</button>
+        <nav className="nav">
+          <button className={view === "process" ? "on" : ""} onClick={() => setView("process")}>Process invoice</button>
+          <button className={view === "invoices" ? "on" : ""} onClick={() => { setView("invoices"); refresh(); }}>
+            Invoices {onHold > 0 ? <span className="count hold" title="On hold for review">{onHold}</span> : <span className="count">{live.length}</span>}
+          </button>
+          <button className={view === "data" ? "on" : ""} onClick={() => setView("data")}>Vendors, POs & rules</button>
+        </nav>
+        <div className="side-foot">
+          <p>Demo company with 5 vendors and 9 purchase orders.</p>
+          <button onClick={reset} disabled={resetting}>{resetting ? "Resetting…" : "Reset demo data"}</button>
+        </div>
+      </aside>
+      <div className="main">
+        <header className="pagehead"><h1>{heads[0]}</h1><p>{heads[1]}</p></header>
+        <div className="content">
+          {view === "process" && <Process onDone={refresh} />}
+          {view === "invoices" && <Invoices runs={runs} />}
+          {view === "data" && <RefData />}
+        </div>
       </div>
-      <main>
-        {tab === "process" && <Process onDone={refresh} />}
-        {tab === "dashboard" && <Dashboard runs={runs} />}
-        {tab === "data" && <RefData />}
-      </main>
-    </>
+    </div>
   );
 }
 
-// ---------------- LIVE RUN VIEW ----------------
-type Live = { note: string | null; model: string | null; ms: number | null; status: Record<string, string>; results: Record<string, StageResult>; extracted: Extracted | null; run: Run | null; error: string | null; file: string };
+// ---------------- PROCESS (live run) ----------------
+type Live = {
+  file: string; docUrl: string; isImage: boolean;
+  status: Record<string, string>; results: Record<string, StageResult>;
+  extracted: Extracted | null; run: Run | null; error: string | null;
+  note: string | null; model: string | null; ms: number | null;
+};
 
 function Process({ onDone }: { onDone: () => void }) {
   const [live, setLive] = useState<Live | null>(null);
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
 
-  async function process(file: File) {
+  async function process(file: File, docUrl?: string) {
     setBusy(true);
-    setLive({ note: null, model: null, ms: null, status: {}, results: {}, extracted: null, run: null, error: null, file: file.name });
+    setLive({
+      file: file.name, docUrl: docUrl ?? URL.createObjectURL(file), isImage: file.type.startsWith("image/"),
+      status: { read: "running" }, results: {}, extracted: null, run: null, error: null, note: null, model: null, ms: null,
+    });
     const fd = new FormData();
     fd.append("file", file);
     try {
       const res = await fetch("/api/process", { method: "POST", body: fd });
-      if (!res.body) throw new Error("No response");
+      if (!res.body) throw new Error("No response from the server.");
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -102,8 +157,8 @@ function Process({ onDone }: { onDone: () => void }) {
             if (!l) return l;
             const n = { ...l, status: { ...l.status }, results: { ...l.results } };
             if (ev.type === "running") n.status[ev.key] = "running";
-            if (ev.type === "extracted") { n.extracted = ev.extracted; n.model = ev.model; n.ms = ev.ms; n.note = null; }
             if (ev.type === "note") n.note = ev.message;
+            if (ev.type === "extracted") { n.extracted = ev.extracted; n.model = ev.model; n.ms = ev.ms; n.note = null; }
             if (ev.type === "stage") { n.status[ev.stage.key] = ev.stage.status; n.results[ev.stage.key] = ev.stage; }
             if (ev.type === "done") n.run = ev.run;
             if (ev.type === "error") n.error = ev.message;
@@ -120,158 +175,217 @@ function Process({ onDone }: { onDone: () => void }) {
 
   async function runSample(f: string) {
     const blob = await fetch("/samples/" + f).then((r) => r.blob());
-    process(new File([blob], f, { type: "application/pdf" }));
+    process(new File([blob], f, { type: "application/pdf" }), "/samples/" + f);
   }
 
-  const ex = live?.extracted;
   return (
-    <div className="grid2">
-      <div className="panel">
-        <h2>1 · Drop in an invoice</h2>
-        <p className="sub">PDF or photo/scan. The AI reads it; the rules decide.</p>
-        <label className={"drop" + (over ? " over" : "")}
-          onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
-          onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f && !busy) process(f); }}>
-          <strong>Drag an invoice here</strong>or click to choose a file
-          <input type="file" accept="application/pdf,image/*" hidden disabled={busy}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) process(f); e.target.value = ""; }} />
-        </label>
-        <div className="samples">
-          <div className="sub" style={{ margin: "4px 0 2px" }}>Or run a test invoice:</div>
-          {SAMPLES.map((s) => (
-            <button key={s.f} className="sample" disabled={busy} onClick={() => runSample(s.f)}>
-              <span><span className="n">{s.n}</span><br /><span className="h">{s.h}</span></span>
-              <a href={"/samples/" + s.f} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>view</a>
-            </button>
+    <div className="work">
+      <section className="pane">
+        <div className="pane-h"><h2>New invoice</h2></div>
+        <div className="pane-b">
+          <label className={"upload" + (over ? " over" : "")}
+            onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+            onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f && !busy) process(f); }}>
+            <b>Upload an invoice</b>PDF, scan or photo
+            <input type="file" accept="application/pdf,image/*" hidden disabled={busy}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) process(f); e.target.value = ""; }} />
+          </label>
+          {SAMPLE_GROUPS.map((g) => (
+            <div className="group" key={g.title}>
+              <h3>{g.title}</h3>
+              {g.items.map((s) => (
+                <button key={s.f} className={"sample" + (live?.file === s.f ? " on" : "")} disabled={busy} onClick={() => runSample(s.f)}>
+                  <b>{s.n}</b><span>{s.h}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </div>
-      </div>
+      </section>
 
-      <div className="panel">
-        <h2>2 · Live run {live && <span className="muted" style={{ fontWeight: 400 }}>— {live.file}</span>}</h2>
-        {!live ? (
-          <div className="empty">Pick an invoice on the left to watch each check run.</div>
-        ) : (
-          <>
-            <ol className="steps">
-              {STAGES.map(([key, label]) => {
-                const st = live.status[key];
-                const r = live.results[key];
-                return (
-                  <li key={key} className={"step" + (st ? "" : " pending")}>
-                    <div className={"dot " + (st ?? "")}>{icon(st ?? "") || "·"}</div>
-                    <div>
-                      <div className="title">{label}{st && <span className="t-status">{statusWord(st)}</span>}</div>
-                      {key === "read" && live.note && !ex && <div className="detail muted">{live.note}</div>}
-                      {key === "read" && live.model && <div className="detail muted" style={{ fontSize: 12 }}>Read by {live.model} in {((live.ms ?? 0) / 1000).toFixed(1)}s</div>}
-                      {key === "read" && ex && (
-                        <div className="kv">
-                          <div><span>Vendor</span><b>{ex.vendor_name ?? "—"}</b></div>
-                          <div><span>Invoice #</span><b>{ex.invoice_number ?? "—"}</b></div>
-                          <div><span>Date</span><b>{ex.invoice_date ?? "—"}</b></div>
-                          <div><span>PO #</span><b>{ex.po_number ?? "not on invoice"}</b></div>
-                          <div><span>Subtotal</span><b>{inr(ex.subtotal)}</b></div>
-                          <div><span>Tax</span><b>{inr(ex.tax)}</b></div>
-                          <div><span>Total</span><b>{inr(ex.total)}</b></div>
-                          <div><span>Bank a/c</span><b>{ex.bank_account ?? "—"}</b></div>
-                        </div>
-                      )}
-                      {r && key !== "decision" && <div className="detail">{r.summary}</div>}
-                      {r && key !== "decision" && <Tags tags={r.tags} high />}
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-            {live.error && <div className="err">Something went wrong: {live.error}</div>}
-            {live.run && <Verdict run={live.run} />}
-          </>
-        )}
-      </div>
+      <section className="pane doc">
+        <Doc url={live?.docUrl} isImage={live?.isImage} run={live?.run ?? null} name={live?.file} />
+      </section>
+
+      <section className="pane">
+        <div className="pane-h">
+          <h2>Checks</h2>
+          {live?.model && <small>Read by {live.model} in {((live.ms ?? 0) / 1000).toFixed(1)}s</small>}
+        </div>
+        <div className="pane-b">
+          {!live ? (
+            <div className="empty">Pick an invoice to watch each check run.</div>
+          ) : (
+            <>
+              {live.extracted && <Fields ex={live.extracted} />}
+              <ol className="checks">
+                {STAGES.map(([key, label]) => {
+                  const st = live.status[key];
+                  const r = live.results[key];
+                  return (
+                    <li key={key} className={"check" + (st ? "" : " idle")}>
+                      <div className={"dot " + (st ?? "")}>{icon(st)}</div>
+                      <div>
+                        <h4>{label}</h4>
+                        {key === "read" && st === "running" && <p>{live.note ?? "AI is reading the document…"}</p>}
+                        {r && key !== "read" && <p>{r.summary}</p>}
+                        {r && key === "read" && <p>{r.summary}</p>}
+                        {r && <Tags tags={r.tags} high />}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+              {live.error && <div className="err">The run stopped: {live.error}</div>}
+              {live.run && <Decision run={live.run} />}
+            </>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
 
-function Verdict({ run }: { run: Run }) {
-  const title = { Approve: "✅ Approved for payment", Review: "⚠️ Needs human review", Reject: "⛔ Rejected" }[run.decision];
+function Doc({ url, isImage, run, name }: { url?: string; isImage?: boolean; run: Run | null; name?: string }) {
+  if (!url) {
+    return (
+      <div className="doc-empty">
+        <div><b>No invoice open</b><p>Upload a bill or pick a test invoice. It will show here next to the checks, so you can compare.</p></div>
+      </div>
+    );
+  }
   return (
-    <div className={`verdict ${run.decision} ${run.priority === "high" ? "high" : ""}`}>
-      <h3>{title}{run.priority === "high" && <span className="tag hi" style={{ marginLeft: 8 }}>HIGH PRIORITY</span>}</h3>
-      <Tags tags={run.tags} high={run.priority === "high"} />
-      <div style={{ marginTop: 8 }}>{run.reason}</div>
+    <div className="doc-frame">
+      {isImage ? <img src={url} alt={name ?? "Invoice"} /> : <iframe src={url + "#toolbar=0&navpanes=0&view=FitH"} title={name ?? "Invoice"} />}
+      {run && (
+        <div className={"stamp " + run.decision} role="status">
+          {STAMP[run.decision][0]}<small>{STAMP[run.decision][1]}</small>
+        </div>
+      )}
     </div>
   );
 }
 
-// ---------------- DASHBOARD ----------------
-function Dashboard({ runs: all }: { runs: Run[] }) {
-  const [filter, setFilter] = useState<string>("All");
-  const [open, setOpen] = useState<string | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
-  const runs = all.filter((r) => showHistory || !r.seeded);
+function Fields({ ex }: { ex: Extracted }) {
+  return (
+    <dl className="fields">
+      <div className="wide"><dt>Vendor</dt><dd>{ex.vendor_name ?? "—"}</dd></div>
+      <div><dt>Invoice no.</dt><dd>{ex.invoice_number ?? "—"}</dd></div>
+      <div><dt>Date</dt><dd>{ex.invoice_date ?? "—"}</dd></div>
+      <div><dt>PO</dt><dd>{ex.po_number ?? <span className="muted">Not on invoice</span>}</dd></div>
+      <div><dt>Bank account</dt><dd>{ex.bank_account ?? "—"}</dd></div>
+      <div><dt>Subtotal</dt><dd className="num">{inr(ex.subtotal)}</dd></div>
+      <div><dt>Tax</dt><dd className="num">{inr(ex.tax)}</dd></div>
+      <div className="wide"><dt>Total payable</dt><dd className="num">{inr(ex.total)}</dd></div>
+    </dl>
+  );
+}
+
+function Decision({ run }: { run: Run }) {
+  const steps = run.decision === "Review" ? run.tags.map((t) => NEXT[t]).filter(Boolean) : [NEXT[run.decision]];
+  return (
+    <div className={`decision ${run.decision}${run.priority === "high" ? " high" : ""}`}>
+      <h3>{TITLE[run.decision]}{run.priority === "high" && <span className="tag urgent">High priority</span>}</h3>
+      <Tags tags={run.tags} high={run.priority === "high"} />
+      <div className="why">{run.reason}</div>
+      <div className="next"><b>What to do next: </b>{steps.join(" ")}</div>
+    </div>
+  );
+}
+
+// ---------------- INVOICES (dashboard) ----------------
+function Invoices({ runs: all }: { runs: Run[] }) {
+  const [seg, setSeg] = useState<"All" | "Review" | "Approve" | "Reject">("All");
+  const [tag, setTag] = useState<string | null>(null);
+  const [history, setHistory] = useState(false);
+  const [open, setOpen] = useState<Run | null>(null);
+
+  const runs = all.filter((r) => history || !r.seeded);
   const tags = useMemo(() => [...new Set(runs.flatMap((r) => r.tags))], [runs]);
-  const shown = runs.filter((r) =>
-    filter === "All" ? true : ["Approve", "Review", "Reject"].includes(filter) ? r.decision === filter : filter === "High priority" ? r.priority === "high" : r.tags.includes(filter));
-  const count = (d: string) => runs.filter((r) => r.decision === d).length;
-  const autoAmt = runs.filter((r) => r.decision === "Approve").reduce((s, r) => s + (r.total ?? 0), 0);
+  const shown = runs.filter((r) => (seg === "All" || r.decision === seg) && (!tag || r.tags.includes(tag)));
+  const n = (d: string) => runs.filter((r) => r.decision === d).length;
+  const approvedAmt = runs.filter((r) => r.decision === "Approve").reduce((s, r) => s + (r.total ?? 0), 0);
+  const heldAmt = runs.filter((r) => r.decision === "Review").reduce((s, r) => s + (r.total ?? 0), 0);
 
   return (
     <>
-      <div className="stats">
-        <div className="stat"><div className="v">{runs.length}</div><div className="l">Invoices processed</div></div>
-        <div className="stat"><div className="v" style={{ color: "var(--ok)" }}>{count("Approve")}</div><div className="l">Approved · {inr(autoAmt)}</div></div>
-        <div className="stat"><div className="v" style={{ color: "var(--warn)" }}>{count("Review")}</div><div className="l">Waiting for review</div></div>
-        <div className="stat"><div className="v" style={{ color: "var(--bad)" }}>{count("Reject")}</div><div className="l">Rejected</div></div>
-        <div className="stat"><div className="v" style={{ color: "var(--bad)" }}>{runs.filter((r) => r.priority === "high").length}</div><div className="l">High priority</div></div>
+      <div className="summary">
+        <div><b>{runs.length}</b><span>Invoices processed</span></div>
+        <div><b style={{ color: "var(--ok)" }}>{n("Approve")}</b><span>Approved · {inr(approvedAmt)}</span></div>
+        <div><b style={{ color: "var(--hold)" }}>{n("Review")}</b><span>On hold · {inr(heldAmt)}</span></div>
+        <div><b style={{ color: "var(--bad)" }}>{n("Reject")}</b><span>Rejected</span></div>
+        <div><b style={{ color: "var(--bad)" }}>{runs.filter((r) => r.priority === "high").length}</b><span>High priority</span></div>
       </div>
-      <div className="filters">
-        {["All", "Approve", "Review", "Reject", "High priority", ...tags].map((f) => (
-          <button key={f} className={"chip" + (filter === f ? " on" : "")} onClick={() => setFilter(f)}>{f}</button>
-        ))}
-        <div className="spacer" />
-        <label className="muted" style={{ fontSize: 13 }}><input type="checkbox" checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} /> show past history</label>
+      <div className="toolbar">
+        <div className="seg">
+          {(["All", "Review", "Approve", "Reject"] as const).map((s) => (
+            <button key={s} className={seg === s ? "on" : ""} onClick={() => setSeg(s)}>
+              {s === "All" ? "All" : s === "Review" ? "On hold" : s === "Approve" ? "Approved" : "Rejected"}
+            </button>
+          ))}
+        </div>
+        <div className="tagfilter">
+          {tags.map((t) => <button key={t} className={tag === t ? "on" : ""} onClick={() => setTag(tag === t ? null : t)}>{t}</button>)}
+        </div>
+        <label className="toggle"><input type="checkbox" checked={history} onChange={(e) => setHistory(e.target.checked)} /> Include past months</label>
       </div>
-      <div className="tablewrap">
+      <div className="table clickable">
         <table>
-          <thead><tr><th>When</th><th>Vendor</th><th>Invoice #</th><th>PO</th><th className="num">Total</th><th>Decision</th><th>Tags</th></tr></thead>
+          <thead><tr><th>Vendor</th><th>Invoice no.</th><th>PO</th><th className="num">Total</th><th>Status</th><th>Flags</th><th>Processed</th></tr></thead>
           <tbody>
-            {shown.length === 0 && <tr><td colSpan={7} className="empty">No runs yet — process an invoice first.</td></tr>}
+            {shown.length === 0 && <tr><td colSpan={7} className="empty">No invoices here yet. Process one to see it listed.</td></tr>}
             {shown.map((r) => (
-              <FragmentRow key={r.id} r={r} open={open === r.id} toggle={() => setOpen(open === r.id ? null : r.id)} />
+              <tr key={r.id} className={r.priority === "high" ? "urgent-row" : ""} onClick={() => setOpen(r)}>
+                <td className="vendor"><b>{r.vendor_name ?? "Unknown vendor"}</b><span>{r.invoice_date ?? ""}</span></td>
+                <td>{r.invoice_number ?? "—"}</td>
+                <td>{r.po_number ?? <span className="muted">None</span>}</td>
+                <td className="num">{inr(r.total)}</td>
+                <td><span className={"status " + r.decision}><i />{TITLE[r.decision]}</span></td>
+                <td><Tags tags={r.tags} high={r.priority === "high"} /></td>
+                <td className="muted">{when(r.created_at)}</td>
+              </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {open && <Drawer run={open} onClose={() => setOpen(null)} />}
     </>
   );
 }
 
-function FragmentRow({ r, open, toggle }: { r: Run; open: boolean; toggle: () => void }) {
+function Drawer({ run, onClose }: { run: Run; onClose: () => void }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  const url = run.file_name && SAMPLE_FILES.has(run.file_name) ? "/samples/" + run.file_name : undefined;
   return (
     <>
-      <tr className={"row" + (r.priority === "high" ? " hirow" : "")} onClick={toggle}>
-        <td className="muted">{new Date(r.created_at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
-        <td>{r.vendor_name ?? "—"}</td>
-        <td>{r.invoice_number ?? "—"}</td>
-        <td>{r.po_number ?? <span className="muted">none</span>}</td>
-        <td className="num">{inr(r.total)}</td>
-        <td><span className={"badge " + r.decision}>{r.decision}</span></td>
-        <td><Tags tags={r.tags} high={r.priority === "high"} /></td>
-      </tr>
-      {open && (
-        <tr className="expand"><td colSpan={7}>
-          <div style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}><b>Why:</b> {r.reason}</div>
-          {r.stages?.length > 0 && (
-            <ol className="steps">
-              {r.stages.filter((s) => s.key !== "decision").map((s) => (
-                <li key={s.key} className="step"><div className={"dot " + s.status}>{icon(s.status)}</div>
-                  <div><div className="title">{s.label}</div><div className="detail">{s.summary}</div></div></li>
-              ))}
-            </ol>
+      <div className="scrim" onClick={onClose} />
+      <div className="drawer" role="dialog" aria-label={`Invoice ${run.invoice_number ?? ""}`}>
+        <div className="doc">
+          {url ? <Doc url={url} run={run} name={run.file_name ?? undefined} /> : (
+            <div className="doc-empty"><div><b>Original file not stored</b><p>Uploaded files aren't kept in this demo. The extracted details are on the right.</p></div></div>
           )}
-          {r.file_name && <div className="muted" style={{ marginTop: 6 }}>File: {r.file_name}</div>}
-        </td></tr>
-      )}
+        </div>
+        <div className="drawer-side">
+          <div className="pane-h"><h2>{run.vendor_name ?? "Invoice"} · {run.invoice_number ?? ""}</h2><button className="x" onClick={onClose} aria-label="Close">×</button></div>
+          <div className="pane-b">
+            {run.extracted && <Fields ex={run.extracted} />}
+            <Decision run={run} />
+            {run.stages?.length > 0 && (
+              <ol className="checks" style={{ marginTop: 16 }}>
+                {run.stages.filter((s) => s.key !== "decision").map((s) => (
+                  <li key={s.key} className="check"><div className={"dot " + s.status}>{icon(s.status)}</div>
+                    <div><h4>{s.label}</h4><p>{s.summary}</p></div></li>
+                ))}
+              </ol>
+            )}
+            <p className="note">Processed {when(run.created_at)}{run.file_name ? ` · ${run.file_name}` : ""}</p>
+          </div>
+        </div>
+      </div>
     </>
   );
 }
@@ -284,42 +398,39 @@ function RefData() {
   if (d.error) return <div className="err">{d.error}</div>;
   const vname = (id: string) => d.vendors.find((v) => v.id === id)?.name ?? id;
   return (
-    <div style={{ display: "grid", gap: 20 }}>
-      <div className="panel">
-        <h2>Rules</h2>
-        <p className="sub">Set by the finance team. AI never changes these.</p>
+    <div className="ref">
+      <section className="pane">
+        <div className="pane-h"><h2>Approval rules</h2><small>Set by finance. The AI can't change these.</small></div>
         <div className="rules">
-          <div className="stat"><div className="v">{d.rules.tolerancePct}%</div><div className="l">Price difference allowed…</div></div>
-          <div className="stat"><div className="v">{inr(d.rules.toleranceCapInr)}</div><div className="l">…but never more than</div></div>
-          <div className="stat"><div className="v">{d.rules.creepCount}×</div><div className="l">Small overcharges before "Vendor creep"</div></div>
-          <div className="stat"><div className="v">{d.rules.creepWindowDays} days</div><div className="l">Look-back window</div></div>
+          <div><b>{d.rules.tolerancePct}%</b><span>Price difference allowed over the PO…</span></div>
+          <div><b>{inr(d.rules.toleranceCapInr)}</b><span>…up to this amount at most</span></div>
+          <div><b>{d.rules.creepCount} times</b><span>Small overcharges before a vendor is flagged</span></div>
+          <div><b>{d.rules.creepWindowDays} days</b><span>How far back we look</span></div>
         </div>
-      </div>
-      <div className="panel">
-        <h2>Purchase orders</h2>
-        <p className="sub">What Acme agreed to buy (before tax), and how much has been billed so far.</p>
-        <div className="tablewrap"><table>
-          <thead><tr><th>PO</th><th>Vendor</th><th>For</th><th className="num">PO value</th><th className="num">Already billed</th><th className="num">Remaining</th><th>Used</th></tr></thead>
+      </section>
+      <section className="pane">
+        <div className="pane-h"><h2>Purchase orders</h2><small>Agreed value before tax, and how much has been billed so far</small></div>
+        <div className="table" style={{ border: 0, borderRadius: 0 }}><table>
+          <thead><tr><th>PO</th><th>Vendor</th><th>For</th><th className="num">Value</th><th className="num">Billed</th><th className="num">Remaining</th><th>Used</th></tr></thead>
           <tbody>{d.pos.map((p) => {
             const pct = Math.min(100, (p.invoiced / p.amount) * 100);
             return (
               <tr key={p.id}><td><b>{p.id}</b></td><td>{vname(p.vendor_id)}</td><td>{p.description}</td>
-                <td className="num">{inr(p.amount)}</td><td className="num">{inr(p.invoiced)}</td><td className="num">{inr(p.amount - p.invoiced)}</td>
-                <td><div className="bar"><i className={p.invoiced > p.amount ? "over" : pct >= 100 ? "full" : ""} style={{ width: pct + "%" }} /></div></td></tr>
+                <td className="num">{inr(p.amount)}</td><td className="num">{inr(p.invoiced)}</td><td className="num">{inr(Math.max(0, p.amount - p.invoiced))}</td>
+                <td><div className="bar"><i className={pct >= 100 ? "full" : ""} style={{ width: pct + "%" }} /></div></td></tr>
             );
           })}</tbody>
         </table></div>
-      </div>
-      <div className="panel">
-        <h2>Approved vendors</h2>
-        <p className="sub">Only these companies can be paid. Bank details on file are what we compare every invoice against.</p>
-        <div className="tablewrap"><table>
-          <thead><tr><th>ID</th><th>Vendor</th><th>GSTIN</th><th>Bank</th><th>Account on file</th></tr></thead>
+      </section>
+      <section className="pane">
+        <div className="pane-h"><h2>Approved vendors</h2><small>Only these companies can be paid, and only to the account on file</small></div>
+        <div className="table" style={{ border: 0, borderRadius: 0 }}><table>
+          <thead><tr><th>Vendor</th><th>GSTIN</th><th>Bank</th><th className="num">Account on file</th></tr></thead>
           <tbody>{d.vendors.map((v) => (
-            <tr key={v.id}><td>{v.id}</td><td>{v.name}</td><td className="muted">{v.gstin}</td><td>{v.bank_name}</td><td>{v.bank_account}</td></tr>
+            <tr key={v.id}><td><b>{v.name}</b></td><td className="muted">{v.gstin}</td><td>{v.bank_name}</td><td className="num">{v.bank_account}</td></tr>
           ))}</tbody>
         </table></div>
-      </div>
+      </section>
     </div>
   );
 }

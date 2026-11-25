@@ -67,6 +67,17 @@ export default function Home() {
   const [resetDone, setResetDone] = useState(false);
   const [session, setSession] = useState(0);
 
+  const [names, setNames] = useState<Record<string, string>>({});
+  const loadNames = useCallback(() => {
+    fetch("/api/names").then((r) => r.json()).then((d) => setNames(d.names ?? {})).catch(() => {});
+  }, []);
+  useEffect(() => { loadNames(); }, [loadNames]);
+  async function rename(key: string, name: string) {
+    setNames((n) => ({ ...n, [key]: name }));
+    const r = await fetch("/api/names", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, name }) }).then((x) => x.json()).catch(() => null);
+    if (r?.names) setNames(r.names);
+  }
+
   const refresh = useCallback(async () => {
     const r = await fetch("/api/runs").then((x) => x.json()).catch(() => ({ runs: [] }));
     setRuns(r.runs ?? []);
@@ -79,6 +90,7 @@ export default function Home() {
     await fetch("/api/reset", { method: "POST" });
     await refresh();
     setResetting(false);
+    setNames({});
     setSession((n) => n + 1); // clears the current run so you start fresh
     setView("process");
     setResetDone(true);
@@ -114,8 +126,8 @@ export default function Home() {
       <div className="main">
         <header className="pagehead"><h1>{heads[0]}</h1><p>{heads[1]}</p></header>
         <div className="content">
-          {view === "process" && <Process key={session} onDone={refresh} runs={runs} />}
-          {view === "invoices" && <Invoices runs={runs} />}
+          {view === "process" && <Process key={session} onDone={refresh} runs={runs} names={names} rename={rename} />}
+          {view === "invoices" && <Invoices runs={runs} names={names} rename={rename} />}
           {view === "data" && <RefData />}
         </div>
       </div>
@@ -163,7 +175,12 @@ type Live = {
   note: string | null; model: string | null; ms: number | null;
 };
 
-function Process({ onDone, runs }: { onDone: () => void; runs: Run[] }) {
+type Namer = { names: Record<string, string>; rename: (key: string, name: string) => void };
+
+/** Display name for an invoice: a rename if one exists, otherwise the file name without extension. */
+const displayName = (names: Record<string, string>, key: string, fallback: string) => names[key] ?? fallback.replace(/\.[^.]+$/, "");
+
+function Process({ onDone, runs, names, rename }: { onDone: () => void; runs: Run[] } & Namer) {
   const [live, setLive] = useState<Live | null>(null);
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
@@ -175,6 +192,19 @@ function Process({ onDone, runs }: { onDone: () => void; runs: Run[] }) {
     if (busy) return;
     setPending(f);
     setSaveName(f.name.replace(/\.[^.]+$/, ""));
+  }
+
+  const [queue, setQueue] = useState<{ total: number; done: number } | null>(null);
+
+  // Bulk upload: no naming prompt; each file is checked in turn, exactly like a single upload.
+  async function bulk(files: File[]) {
+    if (busy) return;
+    setQueue({ total: files.length, done: 0 });
+    for (let i = 0; i < files.length; i++) {
+      await process(files[i], undefined, { name: files[i].name });
+      setQueue({ total: files.length, done: i + 1 });
+    }
+    setTimeout(() => setQueue(null), 4000);
   }
 
   function confirmUpload() {
@@ -260,32 +290,38 @@ function Process({ onDone, runs }: { onDone: () => void; runs: Run[] }) {
         <div className="pane-b">
           <label className={"upload" + (over ? " over" : "")}
             onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
-            onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) choose(f); }}>
-            <b>Upload an invoice</b>PDF or image
-            <input type="file" accept="application/pdf,image/*" hidden disabled={busy}
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) choose(f); e.target.value = ""; }} />
+            onDrop={(e) => { e.preventDefault(); setOver(false); const fs = Array.from(e.dataTransfer.files); if (fs.length === 1) choose(fs[0]); else if (fs.length > 1) bulk(fs); }}>
+            <b>Upload invoices</b>One or many · PDF or image
+            <input type="file" accept="application/pdf,image/*" multiple hidden disabled={busy}
+              onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length === 1) choose(fs[0]); else if (fs.length > 1) bulk(fs); e.target.value = ""; }} />
           </label>
+          {queue && (
+            <div className={"bulk" + (queue.done === queue.total ? " done" : "")}>
+              <b>{queue.done === queue.total ? `All ${queue.total} invoices checked` : `Checking ${queue.done + 1} of ${queue.total}`}</b>
+              <div className="bar wide"><i style={{ width: (queue.done / queue.total) * 100 + "%" }} /></div>
+              <span>Results appear on the Invoices page as each one finishes.</span>
+            </div>
+          )}
           {uploads.length > 0 && (
             <div className="group">
-              <h3>Recent uploads</h3>
-              {uploads.map((u) => {
-                const r = runs.find((x) => (x.extracted as any)?.file_path === u.path);
-                return (
-                  <button key={u.path} className={"sample" + (live?.file === u.name ? " on" : "")} disabled={busy} onClick={() => runUpload(u)}>
-                    <b>{u.name.replace(/\.[^.]+$/, "")}</b>
-                    <span>{r ? `${r.vendor_name ?? "Uploaded invoice"} · ${TITLE[r.decision]}` : "Not checked yet"}</span>
-                  </button>
-                );
-              })}
+              <h3>Recent uploads <small>{uploads.length}</small></h3>
+              <div className="uploads">
+                {uploads.map((u) => {
+                  const r = runs.find((x) => (x.extracted as any)?.file_path === u.path);
+                  return (
+                    <Item key={u.path} name={displayName(names, u.path, u.name)} sub={r ? `${r.vendor_name ?? "Uploaded invoice"} · ${TITLE[r.decision]}` : "Not checked yet"}
+                      on={live?.file === u.name} disabled={busy} onRun={() => runUpload(u)} onRename={(n) => rename(u.path, n)} />
+                  );
+                })}
+              </div>
             </div>
           )}
           {SAMPLE_GROUPS.map((g) => (
             <div className="group" key={g.title}>
               <h3>{g.title}</h3>
-              {g.items.map((s) => (
-                <button key={s.f} className={"sample" + (live?.file === s.f ? " on" : "")} disabled={busy} onClick={() => runSample(s.f)}>
-                  <b>{s.n}</b><span>{s.h}</span>
-                </button>
+              {g.items.map((it) => (
+                <Item key={it.f} name={displayName(names, it.f, it.n)} sub={it.h} on={live?.file === it.f} disabled={busy}
+                  onRun={() => runSample(it.f)} onRename={(n) => rename(it.f, n)} />
               ))}
             </div>
           ))}
@@ -346,6 +382,26 @@ function Process({ onDone, runs }: { onDone: () => void; runs: Run[] }) {
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+/** A row in the invoice list: click to check it, pencil to rename. */
+function Item({ name, sub, on, disabled, onRun, onRename }: { name: string; sub: string; on?: boolean; disabled?: boolean; onRun: () => void; onRename: (n: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(name);
+  if (editing) {
+    return (
+      <form className="item editing" onSubmit={(e) => { e.preventDefault(); if (val.trim()) onRename(val.trim()); setEditing(false); }}>
+        <input className="field slim" autoFocus value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setEditing(false)} aria-label="Invoice name" />
+        <div className="item-actions"><button type="button" className="btn sm" onClick={() => setEditing(false)}>Cancel</button><button type="submit" className="btn sm primary">Save</button></div>
+      </form>
+    );
+  }
+  return (
+    <div className={"item" + (on ? " on" : "")}>
+      <button className="sample" disabled={disabled} onClick={onRun}><b>{name}</b><span>{sub}</span></button>
+      <button className="pencil" aria-label={`Rename ${name}`} title="Rename" onClick={() => { setVal(name); setEditing(true); }}>✎</button>
     </div>
   );
 }
@@ -438,7 +494,7 @@ function Decision({ run }: { run: Run }) {
 }
 
 // ---------------- INVOICES (dashboard) ----------------
-function Invoices({ runs: all }: { runs: Run[] }) {
+function Invoices({ runs: all, names, rename }: { runs: Run[] } & Namer) {
   const [seg, setSeg] = useState<"All" | "Review" | "Approve" | "Reject">("All");
   const [tag, setTag] = useState<string | null>(null);
   const [history, setHistory] = useState(false);
@@ -480,7 +536,7 @@ function Invoices({ runs: all }: { runs: Run[] }) {
             {shown.length === 0 && <tr><td colSpan={7} className="empty">No invoices yet. Processed invoices appear here.</td></tr>}
             {shown.map((r) => (
               <tr key={r.id} className={r.priority === "high" ? "urgent-row" : ""} onClick={() => setOpen(r)}>
-                <td className="vendor"><b>{r.vendor_name ?? "Unknown vendor"}</b><span>{r.file_name && !SAMPLE_FILES.has(r.file_name) ? r.file_name : r.invoice_date ?? ""}</span></td>
+                <td className="vendor"><b>{r.vendor_name ?? "Unknown vendor"}</b><span>{keyOf(r) ? displayName(names, keyOf(r)!, r.file_name ?? "") : r.invoice_date ?? ""}</span></td>
                 <td>{r.invoice_number ?? "—"}</td>
                 <td>{r.po_number ?? <span className="muted">None</span>}</td>
                 <td className="num">{inr(r.total)}</td>
@@ -492,12 +548,19 @@ function Invoices({ runs: all }: { runs: Run[] }) {
           </tbody>
         </table>
       </div>
-      {open && <Drawer run={open} onClose={() => setOpen(null)} />}
+      {open && <Drawer run={open} onClose={() => setOpen(null)} names={names} rename={rename} />}
     </>
   );
 }
 
-function Drawer({ run, onClose }: { run: Run; onClose: () => void }) {
+/** The key an invoice's display name is stored under: the test file name, or the upload's saved path. */
+const keyOf = (r: Run) => (r.extracted as any)?.file_path ?? (r.file_name && SAMPLE_FILES.has(r.file_name) ? r.file_name : null);
+
+function Drawer({ run, onClose, names, rename }: { run: Run; onClose: () => void } & Namer) {
+  const [editing, setEditing] = useState(false);
+  const key = keyOf(run);
+  const label = key ? displayName(names, key, run.file_name ?? "") : run.invoice_number ?? "Invoice";
+  const [val, setVal] = useState(label);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
@@ -515,7 +578,17 @@ function Drawer({ run, onClose }: { run: Run; onClose: () => void }) {
           )}
         </div>
         <div className="drawer-side">
-          <div className="pane-h"><h2>{run.vendor_name ?? "Invoice"} · {run.invoice_number ?? ""}</h2><button className="x" onClick={onClose} aria-label="Close">×</button></div>
+          <div className="pane-h">
+            {editing && key ? (
+              <form className="rename-row" onSubmit={(e) => { e.preventDefault(); if (val.trim()) rename(key, val.trim()); setEditing(false); }}>
+                <input className="field slim" autoFocus value={val} onChange={(e) => setVal(e.target.value)} aria-label="Invoice name" />
+                <button type="submit" className="btn sm primary">Save</button>
+              </form>
+            ) : (
+              <h2 className="dr-title">{label}{key && <button className="pencil inline" title="Rename" aria-label="Rename" onClick={() => { setVal(label); setEditing(true); }}>✎</button>}<small>{run.vendor_name} · {run.invoice_number}</small></h2>
+            )}
+            <button className="x" onClick={onClose} aria-label="Close">×</button>
+          </div>
           <div className="pane-b">
             {run.extracted && <Fields ex={run.extracted} />}
             <Decision run={run} />

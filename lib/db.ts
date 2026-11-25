@@ -83,7 +83,7 @@ export async function fileUrl(path: string): Promise<string | null> {
 }
 
 /** Uploaded files, newest first. Path format: uploads/<timestamp>__<name> */
-export async function listUploads(limit = 8) {
+export async function listUploads(limit = 50) {
   await ensureBucket();
   const { data } = await client().storage.from(BUCKET).list("uploads", { limit: 100, sortBy: { column: "name", order: "desc" } });
   return (data ?? [])
@@ -99,4 +99,24 @@ export async function clearFiles() {
   const db = client();
   const { data } = await db.storage.from(BUCKET).list("uploads", { limit: 1000 });
   if (data?.length) await db.storage.from(BUCKET).remove(data.map((f) => "uploads/" + f.name));
+  await db.storage.from(BUCKET).remove([NAMES]);
+}
+
+// ---- Display names (rename any invoice: test files and uploads) ----
+// Stored as one small JSON file: { "<sample file or upload path>": "Display name" }
+const NAMES = "meta/names.json";
+
+export async function getNames(): Promise<Record<string, string>> {
+  const { data } = await client().storage.from(BUCKET).download(NAMES);
+  if (!data) return {};
+  try { return JSON.parse(await data.text()); } catch { return {}; }
+}
+
+export async function setName(key: string, name: string) {
+  await ensureBucket();
+  const names = await getNames();
+  names[key] = name;
+  const { error } = await client().storage.from(BUCKET).upload(NAMES, Buffer.from(JSON.stringify(names)), { contentType: "application/json", upsert: true });
+  if (error) throw new Error(error.message);
+  return names;
 }

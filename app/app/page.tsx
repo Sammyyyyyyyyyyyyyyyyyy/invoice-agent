@@ -291,7 +291,12 @@ function Process({ onDone, runs, names, rename }: { onDone: () => void; runs: Ru
           <label className={"upload" + (over ? " over" : "")}
             onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
             onDrop={(e) => { e.preventDefault(); setOver(false); const fs = Array.from(e.dataTransfer.files); if (fs.length === 1) choose(fs[0]); else if (fs.length > 1) bulk(fs); }}>
-            <b>Upload invoices</b>One or many · PDF or image
+            <b>Upload an invoice</b>PDF or image · you&rsquo;ll name it before checking
+            <input type="file" accept="application/pdf,image/*" hidden disabled={busy}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) choose(f); e.target.value = ""; }} />
+          </label>
+          <label className={"upload bulk-up" + (busy ? " off" : "")}>
+            <b>Bulk upload</b>Select several invoices at once · each is checked in turn
             <input type="file" accept="application/pdf,image/*" multiple hidden disabled={busy}
               onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length === 1) choose(fs[0]); else if (fs.length > 1) bulk(fs); e.target.value = ""; }} />
           </label>

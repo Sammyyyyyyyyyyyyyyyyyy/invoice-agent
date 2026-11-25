@@ -22,7 +22,7 @@ export default function Home() {
     <div className="home">
       <header className="home-top">
         <div className="brand dark"><div className="brand-mark">A</div><div><b>Invoice Agent</b><span>Accounts payable, checked</span></div></div>
-        <Link href="/app" className="btn primary">Open workspace</Link>
+        <nav className="how-nav"><Link href="/how">How it works</Link><Link href="/app" className="btn primary">Open workspace</Link></nav>
       </header>
 
       <section className="hero">
@@ -33,7 +33,7 @@ export default function Home() {
             pay, what to hold and why.
           </p>
           <Link href="/app" className="cta">Get started <span aria-hidden>→</span></Link>
-          <p className="fine">Demo workspace for Acme Retail with 5 vendors, 9 purchase orders and 10 test invoices.</p>
+          <p className="fine">Demo workspace for Acme Retail with 5 vendors, 9 purchase orders and 10 test invoices. <Link href="/how">See how it works and the design decisions</Link>.</p>
         </div>
         <div className="hero-art" aria-hidden>
           <div className="mock-inv">
@@ -70,7 +70,7 @@ export default function Home() {
             <div key={t}><span className={"tag" + (t === "Invalid vendor" || t === "Duplicate invoice" ? " bad" : t === "Bank changed" ? " urgent" : "")}>{t}</span><p>{d}</p></div>
           ))}
         </div>
-        <Link href="/app" className="cta">Get started <span aria-hidden>→</span></Link>
+        <div className="cta-row"><Link href="/app" className="cta">Get started <span aria-hidden>→</span></Link><Link href="/how" className="cta ghost">How it works</Link></div>
       </section>
 
       <footer className="home-foot">Built by Shambhavi KM · Zamp AI Solutions Associate case study, 2026</footer>

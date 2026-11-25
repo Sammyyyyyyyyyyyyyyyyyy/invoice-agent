@@ -120,3 +120,21 @@ export async function setName(key: string, name: string) {
   if (error) throw new Error(error.message);
   return names;
 }
+
+// ---- Reviewer decisions (human in the loop) ----
+export type AuditEvent = { at: string; by: string; action: "Approve" | "Reject"; note: string };
+
+export async function reviewRun(id: string, action: "Approve" | "Reject", note: string, by: string) {
+  const db = client();
+  const run = must(await db.from("runs").select("*").eq("id", id).single()) as any;
+  if (run.decision !== "Review") throw new Error("Only invoices on hold can be reviewed.");
+  const extracted = run.extracted ?? {};
+  const audit: AuditEvent[] = [...(extracted._audit ?? []), { at: new Date().toISOString(), by, action, note }];
+  const updated = must(await db.from("runs").update({ decision: action, extracted: { ...extracted, _audit: audit, _system_decision: "Review" } }).eq("id", id).select().single());
+  // An approved invoice uses up its PO's balance, same as an automatic approval.
+  if (action === "Approve" && run.po_number && run.subtotal != null) {
+    const po = (await db.from("purchase_orders").select("id, vendor_id").eq("id", run.po_number).maybeSingle()).data as any;
+    if (po && po.vendor_id === run.vendor_id) await addToPo(po.id, Number(run.subtotal));
+  }
+  return numRun(updated);
+}

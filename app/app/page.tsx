@@ -30,6 +30,7 @@ const SAMPLE_GROUPS: { title: string; items: { f: string; n: string; h: string }
   },
 ];
 const SAMPLE_FILES = new Set(SAMPLE_GROUPS.flatMap((g) => g.items.map((i) => i.f)));
+const SAMPLE_NAMES: Record<string, string> = Object.fromEntries(SAMPLE_GROUPS.flatMap((g) => g.items.map((i) => [i.f, `${i.n} – ${i.h}`])));
 
 const inr = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
@@ -48,6 +49,10 @@ const NEXT: Record<string, string> = {
   "Vendor creep": "Review the billing pattern with the vendor before payment.",
   "Missing info": "Request a complete invoice from the vendor.",
 };
+type Audit = { at: string; by: string; action: "Approve" | "Reject"; note: string };
+const auditOf = (r: Run): Audit[] => ((r.extracted as any)?._audit ?? []) as Audit[];
+const statusLabel = (r: Run) => (auditOf(r).length ? (r.decision === "Approve" ? "Approved by reviewer" : "Rejected by reviewer") : TITLE[r.decision]);
+const MANUAL_MINUTES = 10; // assumed time for a person to check one invoice by hand
 const when = (s: string) => new Date(s).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 function Tags({ tags, high }: { tags: string[]; high?: boolean }) {
@@ -117,12 +122,14 @@ export default function Home() {
           <div className="brand-mark">A</div>
           <div><b>Invoice Agent</b><span>Acme Retail · Payables</span></div>
         </a>
+        <a className="home-link" href="/">← Home</a>
         <nav className="nav">
           <button className={view === "process" ? "on" : ""} onClick={() => setView("process")}>Process invoice</button>
           <button className={view === "invoices" ? "on" : ""} onClick={() => { setView("invoices"); refresh(); }}>
             Invoices {onHold > 0 ? <span className="count hold" title="On hold for review">{onHold}</span> : <span className="count">{live.length}</span>}
           </button>
           <button className={view === "data" ? "on" : ""} onClick={() => setView("data")}>Vendors, POs & rules</button>
+          <a className="navlink" href="/how">How it works</a>
         </nav>
         <div className="side-foot">
           <p>Demo workspace: 5 vendors, 9 purchase orders.</p>
@@ -133,7 +140,7 @@ export default function Home() {
         <header className="pagehead"><h1>{heads[0]}</h1><p>{heads[1]}</p></header>
         <div className="content">
           {view === "process" && <Process key={session} onDone={refresh} runs={runs} names={names} rename={rename} />}
-          {view === "invoices" && <Invoices runs={runs} names={names} rename={rename} />}
+          {view === "invoices" && <Invoices runs={runs} names={names} rename={rename} onChanged={refresh} />}
           {view === "data" && <RefData />}
         </div>
       </div>
@@ -184,7 +191,7 @@ type Live = {
 type Namer = { names: Record<string, string>; rename: (key: string, name: string) => void };
 
 /** Display name for an invoice: a rename if one exists, otherwise the file name without extension. */
-const displayName = (names: Record<string, string>, key: string, fallback: string) => names[key] ?? fallback.replace(/\.[^.]+$/, "");
+const displayName = (names: Record<string, string>, key: string, fallback: string) => names[key] ?? SAMPLE_NAMES[key] ?? fallback.replace(/\.[^.]+$/, "");
 
 function Process({ onDone, runs, names, rename }: { onDone: () => void; runs: Run[] } & Namer) {
   const [live, setLive] = useState<Live | null>(null);
@@ -331,7 +338,7 @@ function Process({ onDone, runs, names, rename }: { onDone: () => void; runs: Ru
             <div className="group" key={g.title}>
               <h3>{g.title}</h3>
               {g.items.map((it) => (
-                <Item key={it.f} name={displayName(names, it.f, it.n)} sub={it.h} on={live?.file === it.f} disabled={busy}
+                <Item key={it.f} name={names[it.f] ?? it.n} sub={it.h} on={live?.file === it.f} disabled={busy}
                   onRun={() => runSample(it.f)} onRename={(n) => rename(it.f, n)} />
               ))}
             </div>
@@ -472,7 +479,7 @@ function InfoChecks({ stages }: { stages: StageResult[] }) {
   );
 }
 
-function Decision({ run }: { run: Run }) {
+function Decision({ run, inDrawer }: { run: Run; inDrawer?: boolean }) {
   const stages = run.stages ?? [];
   const get = (k: string) => stages.find((x) => x.key === k);
   const issues = stages.filter((x) => x.status === "warn" && x.key !== "decision");
@@ -481,31 +488,35 @@ function Decision({ run }: { run: Run }) {
   return (
     <div className={`decision ${run.decision}${run.priority === "high" ? " high" : ""}`}>
       <div className="d-head">
-        <span className={"status " + run.decision}><i />{TITLE[run.decision]}</span>
+        <span className={"status " + run.decision}><i />{statusLabel(run)}</span>
         {run.priority === "high" && <span className="tag urgent">High priority</span>}
       </div>
       <dl className="d-rows">
-        {run.decision === "Approve" && (
+        {run.decision === "Approve" && !auditOf(run).length && (
           <>
             {get("po") && <div><dt>Purchase order</dt><dd>{get("po")!.summary}</dd></div>}
             {get("match") && <div><dt>Amount</dt><dd>{get("match")!.summary}</dd></div>}
             <div><dt>Checks</dt><dd className="with-info">All checks passed. <InfoChecks stages={stages} /></dd></div>
           </>
         )}
-        {run.decision === "Review" && issues.map((x) => (
+        {(run.decision === "Review" || auditOf(run).length > 0) && issues.map((x) => (
           <div key={x.key}><dt><Tags tags={x.tags} high={run.priority === "high"} /></dt><dd>{x.summary}</dd></div>
         ))}
-        {run.decision === "Reject" && failed && (
+        {run.decision === "Reject" && failed && !auditOf(run).length && (
           <div><dt><Tags tags={failed.tags} /></dt><dd>{failed.summary}</dd></div>
         )}
-        <div className="d-next"><dt>Next step</dt><dd>{next.join(" ")}</dd></div>
+        {auditOf(run).length > 0 ? (
+          <div className="d-next"><dt>Reviewer note</dt><dd>{auditOf(run).at(-1)!.note} <span className="muted">({auditOf(run).at(-1)!.by})</span></dd></div>
+        ) : (
+          <div className="d-next"><dt>Next step</dt><dd>{next.join(" ")}{run.decision === "Review" && !inDrawer && <span className="muted"> Resolve it from the Invoices page.</span>}</dd></div>
+        )}
       </dl>
     </div>
   );
 }
 
 // ---------------- INVOICES (dashboard) ----------------
-function Invoices({ runs: all, names, rename }: { runs: Run[] } & Namer) {
+function Invoices({ runs: all, names, rename, onChanged }: { runs: Run[]; onChanged: () => void } & Namer) {
   const [seg, setSeg] = useState<"All" | "Review" | "Approve" | "Reject">("All");
   const [tag, setTag] = useState<string | null>(null);
   const [history, setHistory] = useState(false);
@@ -518,8 +529,20 @@ function Invoices({ runs: all, names, rename }: { runs: Run[] } & Namer) {
   const approvedAmt = runs.filter((r) => r.decision === "Approve").reduce((s, r) => s + (r.total ?? 0), 0);
   const heldAmt = runs.filter((r) => r.decision === "Review").reduce((s, r) => s + (r.total ?? 0), 0);
 
+  const live = all.filter((r) => !r.seeded);
+  const auto = live.filter((r) => r.decision !== "Review" && !auditOf(r).length).length;
+  const stopped = live.filter((r) => r.decision === "Reject" || r.decision === "Review" || auditOf(r).length).reduce((s, r) => s + (r.total ?? 0), 0);
+  const risky = live.filter((r) => r.tags.some((t) => ["Bank changed", "Vendor creep", "Duplicate invoice", "Invalid vendor"].includes(t))).length;
+  const mins = auto * MANUAL_MINUTES;
+
   return (
     <>
+      <div className="impact">
+        <div><b>{live.length ? Math.round((auto / live.length) * 100) : 0}%</b><span>Handled without a person<br /><em>{auto} of {live.length} invoices</em></span></div>
+        <div><b>{inr(stopped)}</b><span>Stopped or held before payment<br /><em>Rejected and on-hold invoices</em></span></div>
+        <div><b>{mins >= 60 ? `${(mins / 60).toFixed(1)} hrs` : `${mins} min`}</b><span>Manual checking saved<br /><em>At ~{MANUAL_MINUTES} min per invoice</em></span></div>
+        <div><b>{risky}</b><span>Fraud and payment risks caught<br /><em>Bank changes, duplicates, unknown vendors, creep</em></span></div>
+      </div>
       <div className="summary">
         <div><b>{runs.length}</b><span>Invoices processed</span></div>
         <div><b style={{ color: "var(--ok)" }}>{n("Approve")}</b><span>Approved · {inr(approvedAmt)}</span></div>
@@ -551,7 +574,7 @@ function Invoices({ runs: all, names, rename }: { runs: Run[] } & Namer) {
                 <td>{r.invoice_number ?? "—"}</td>
                 <td>{r.po_number ?? <span className="muted">None</span>}</td>
                 <td className="num">{inr(r.total)}</td>
-                <td><span className={"status " + r.decision}><i />{TITLE[r.decision]}</span></td>
+                <td><span className={"status " + r.decision}><i />{statusLabel(r)}</span></td>
                 <td><Tags tags={r.tags} high={r.priority === "high"} /></td>
                 <td className="muted">{when(r.created_at)}</td>
               </tr>
@@ -559,7 +582,8 @@ function Invoices({ runs: all, names, rename }: { runs: Run[] } & Namer) {
           </tbody>
         </table>
       </div>
-      {open && <Drawer run={open} onClose={() => setOpen(null)} names={names} rename={rename} />}
+      {open && <Drawer run={open} onClose={() => setOpen(null)} names={names} rename={rename}
+        onReviewed={(r) => { setOpen(r); onChanged(); }} />}
     </>
   );
 }
@@ -567,8 +591,22 @@ function Invoices({ runs: all, names, rename }: { runs: Run[] } & Namer) {
 /** The key an invoice's display name is stored under: the test file name, or the upload's saved path. */
 const keyOf = (r: Run) => (r.extracted as any)?.file_path ?? (r.file_name && SAMPLE_FILES.has(r.file_name) ? r.file_name : null);
 
-function Drawer({ run, onClose, names, rename }: { run: Run; onClose: () => void } & Namer) {
+function Drawer({ run, onClose, names, rename, onReviewed }: { run: Run; onClose: () => void; onReviewed: (r: Run) => void } & Namer) {
   const [editing, setEditing] = useState(false);
+  const [note, setNote] = useState("");
+  const [by, setBy] = useState("Shambhavi (AP)");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function review(action: "Approve" | "Reject") {
+    setSaving(true); setErr(null);
+    const r = await fetch("/api/review", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: run.id, action, note, by }) })
+      .then((x) => x.json()).catch((e) => ({ error: e.message }));
+    setSaving(false);
+    if (r.error) return setErr(r.error);
+    setNote("");
+    onReviewed(r.run);
+  }
+  const audit = auditOf(run);
   const key = keyOf(run);
   const label = key ? displayName(names, key, run.file_name ?? "") : run.invoice_number ?? "Invoice";
   const [val, setVal] = useState(label);
@@ -601,8 +639,33 @@ function Drawer({ run, onClose, names, rename }: { run: Run; onClose: () => void
             <button className="x" onClick={onClose} aria-label="Close">×</button>
           </div>
           <div className="pane-b">
+            <Decision run={run} inDrawer />
+            {run.decision === "Review" && !run.seeded && (
+              <form className="review" onSubmit={(e) => e.preventDefault()}>
+                <h3>Resolve this invoice</h3>
+                <label>Note <span>(required, kept in the audit trail)</span>
+                  <textarea className="field" rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Called Dell on the number on file; new bank account confirmed." />
+                </label>
+                <label>Reviewed by<input className="field slim" value={by} onChange={(e) => setBy(e.target.value)} /></label>
+                {err && <div className="err">{err}</div>}
+                <div className="review-actions">
+                  <button type="button" className="btn danger" disabled={saving || !note.trim()} onClick={() => review("Reject")}>Reject</button>
+                  <button type="button" className="btn primary" disabled={saving || !note.trim()} onClick={() => review("Approve")}>Approve for payment</button>
+                </div>
+              </form>
+            )}
+            <div className="audit">
+              <h3>Audit trail</h3>
+              <ol>
+                <li><i className={"mini " + (audit.length ? "warn" : run.decision === "Approve" ? "pass" : run.decision === "Reject" ? "fail" : "warn")}>{icon(audit.length ? "warn" : run.decision === "Approve" ? "pass" : run.decision === "Reject" ? "fail" : "warn")}</i>
+                  <span><b>{audit.length ? "On hold for review" : TITLE[run.decision]}</b> by Invoice Agent{run.tags.length ? ` · ${run.tags.join(", ")}` : ""}<em>{when(run.created_at)}</em></span></li>
+                {audit.map((a, i) => (
+                  <li key={i}><i className={"mini " + (a.action === "Approve" ? "pass" : "fail")}>{icon(a.action === "Approve" ? "pass" : "fail")}</i>
+                    <span><b>{a.action === "Approve" ? "Approved for payment" : "Rejected"}</b> by {a.by}<q>{a.note}</q><em>{when(a.at)}</em></span></li>
+                ))}
+              </ol>
+            </div>
             {run.extracted && <Fields ex={run.extracted} />}
-            <Decision run={run} />
             {run.stages?.length > 0 && (
               <ol className="checks" style={{ marginTop: 16 }}>
                 {run.stages.filter((s) => s.key !== "decision").map((s) => (

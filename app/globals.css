@@ -365,3 +365,9 @@ a.btn { text-decoration: none; display: inline-block; }
 .plain { margin: 14px 0 0; padding-left: 18px; color: var(--ink-2); display: grid; gap: 8px; }
 .plain b { color: var(--ink); }
 @media (max-width: 900px) { .decisions, .home-sec.two { grid-template-columns: 1fr; } }
+
+/* unread markers */
+.seg button { position: relative; }
+.unread { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-left: 6px; vertical-align: 2px; box-shadow: 0 0 0 2px var(--paper); }
+.seg button.on .unread { box-shadow: 0 0 0 2px var(--ledger); }
+.unread.row { margin: 0 7px 0 0; vertical-align: 1px; }

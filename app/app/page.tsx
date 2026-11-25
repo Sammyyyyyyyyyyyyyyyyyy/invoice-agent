@@ -522,6 +522,21 @@ function Invoices({ runs: all, names, rename, onChanged }: { runs: Run[]; onChan
   const [history, setHistory] = useState(false);
   const [open, setOpen] = useState<Run | null>(null);
 
+  // "Unread" = an on-hold or rejected invoice this viewer hasn't opened yet (remembered in this browser).
+  const [seen, setSeen] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try { setSeen(new Set(JSON.parse(localStorage.getItem("seenRuns") ?? "[]"))); } catch {}
+  }, []);
+  function markSeen(id: string) {
+    setSeen((prev) => {
+      const next = new Set(prev).add(id);
+      try { localStorage.setItem("seenRuns", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }
+  const isUnread = (r: Run) => !r.seeded && (r.decision === "Review" || r.decision === "Reject") && !auditOf(r).length && !seen.has(r.id);
+  const unreadOf = (d: string) => all.filter((r) => r.decision === d && isUnread(r)).length;
+
   const runs = all.filter((r) => history || !r.seeded);
   const tags = useMemo(() => [...new Set(runs.flatMap((r) => r.tags))], [runs]);
   const shown = runs.filter((r) => (seg === "All" || r.decision === seg) && (!tag || r.tags.includes(tag)));
@@ -555,6 +570,7 @@ function Invoices({ runs: all, names, rename, onChanged }: { runs: Run[]; onChan
           {(["All", "Review", "Approve", "Reject"] as const).map((s) => (
             <button key={s} className={seg === s ? "on" : ""} onClick={() => setSeg(s)}>
               {s === "All" ? "All" : s === "Review" ? "On hold" : s === "Approve" ? "Approved" : "Rejected"}
+              {(s === "Review" || s === "Reject") && unreadOf(s) > 0 && <span className="unread" title={`${unreadOf(s)} unread`} aria-label={`${unreadOf(s)} unread`} />}
             </button>
           ))}
         </div>
@@ -569,8 +585,8 @@ function Invoices({ runs: all, names, rename, onChanged }: { runs: Run[]; onChan
           <tbody>
             {shown.length === 0 && <tr><td colSpan={7} className="empty">No invoices yet. Processed invoices appear here.</td></tr>}
             {shown.map((r) => (
-              <tr key={r.id} className={r.priority === "high" ? "urgent-row" : ""} onClick={() => setOpen(r)}>
-                <td className="vendor"><b>{r.vendor_name ?? "Unknown vendor"}</b><span>{keyOf(r) ? displayName(names, keyOf(r)!, r.file_name ?? "") : r.invoice_date ?? ""}</span></td>
+              <tr key={r.id} className={r.priority === "high" ? "urgent-row" : ""} onClick={() => { setOpen(r); markSeen(r.id); }}>
+                <td className="vendor"><b>{isUnread(r) && <span className="unread row" aria-label="Unread" />}{r.vendor_name ?? "Unknown vendor"}</b><span>{keyOf(r) ? displayName(names, keyOf(r)!, r.file_name ?? "") : r.invoice_date ?? ""}</span></td>
                 <td>{r.invoice_number ?? "—"}</td>
                 <td>{r.po_number ?? <span className="muted">None</span>}</td>
                 <td className="num">{inr(r.total)}</td>

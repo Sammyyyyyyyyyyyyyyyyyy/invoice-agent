@@ -14,6 +14,7 @@ export async function POST(req: Request) {
   if (!(file instanceof File)) return Response.json({ error: "No file uploaded" }, { status: 400 });
   const name = String(form.get("name") || file.name).trim() || file.name;
   const isSample = form.get("sample") === "1";
+  const existingPath = String(form.get("path") || "");
   const buf = Buffer.from(await file.arrayBuffer());
   const mime = file.type || "application/pdf";
 
@@ -21,6 +22,14 @@ export async function POST(req: Request) {
     async start(controller) {
       const send = (o: unknown) => controller.enqueue(new TextEncoder().encode(JSON.stringify(o) + "\n"));
       try {
+        // Keep a copy of every uploaded file (even if processing fails) so it can be reopened later.
+        let filePath: string | null = existingPath || null;
+        if (!isSample && !filePath) {
+          filePath = `uploads/${Date.now()}__${encodeURIComponent(name)}`;
+          await saveFile(filePath, buf, mime).catch(() => { filePath = null; });
+          send({ type: "saved", path: filePath });
+        }
+
         // 1. AI reads the invoice
         send({ type: "running", key: "read", label: STAGE_LABELS.read });
         const t0 = Date.now();
@@ -54,11 +63,9 @@ export async function POST(req: Request) {
           variance: out.variance,
           within_tolerance: out.withinTolerance,
           stages: out.stages,
-          extracted,
+          extracted: { ...extracted, file_path: filePath } as any,
           seeded: false,
         });
-        // Keep a copy of uploaded files so they can be reopened from the Invoices page.
-        if (!isSample) await saveFile(run.id, buf, mime).catch(() => {});
         // Only approved invoices use up the PO's balance.
         if (out.decision === "Approve" && out.po && out.poCharge > 0) await addToPo(out.po.id, out.poCharge);
 

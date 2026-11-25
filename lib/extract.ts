@@ -38,38 +38,44 @@ Rules:
 - If a field is not on the invoice, return null. Do NOT invent or infer values — especially the PO number.
 - The buyer is "Acme Retail Pvt Ltd"; vendor_name is the OTHER company (the one asking to be paid).`;
 
-// If the main model is busy or unavailable, fall back to the next one so a live run doesn't fail.
+// If a model is busy or unavailable, fall back to the next one so a live run doesn't fail.
+const BACKUPS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+let lastGood: string | null = null; // the model that worked most recently is tried first
+
 const MODELS = () =>
-  [process.env.GEMINI_MODEL, "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest"]
-    .filter((m, i, a): m is string => !!m && a.indexOf(m) === i);
+  [lastGood, process.env.GEMINI_MODEL, ...BACKUPS].filter((m, i, a): m is string => !!m && a.indexOf(m) === i);
+
+export class AiBusyError extends Error {}
 
 export async function extractInvoice(file: Buffer, mimeType: string, onRetry?: (msg: string) => void): Promise<Extracted & { model: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
   const ai = new GoogleGenAI({ apiKey });
-  let lastErr: unknown;
-  for (const model of MODELS()) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+  const deadline = Date.now() + 45000;
+  const unavailable = new Set<string>();
+  for (let round = 0; round < 3 && Date.now() < deadline; round++) {
+    for (const model of MODELS()) {
+      if (unavailable.has(model) || Date.now() > deadline) continue;
       try {
         const res = await ai.models.generateContent({
           model,
           contents: [{ role: "user", parts: [{ inlineData: { mimeType, data: file.toString("base64") } }, { text: PROMPT }] }],
           config: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0 },
         });
+        lastGood = model;
         return { ...parse(res.text ?? "{}"), model };
       } catch (e: any) {
-        lastErr = e;
         const msg = String(e?.message ?? e);
-        const busy = /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED/i.test(msg);
-        const gone = /404|NOT_FOUND|no longer available/i.test(msg);
+        const busy = /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|deadline|timeout/i.test(msg);
+        const gone = /404|NOT_FOUND|no longer available|not supported/i.test(msg);
         if (!busy && !gone) throw e;
-        if (busy && attempt === 0) { onRetry?.(`AI model ${model} is busy — retrying…`); await new Promise((r) => setTimeout(r, 1500)); continue; }
-        onRetry?.(`AI model ${model} unavailable — switching to a backup model…`);
-        break;
+        if (gone) unavailable.add(model);
+        onRetry?.(`${model} is ${gone ? "unavailable" : "busy"}. Trying another model…`);
       }
     }
+    await new Promise((r) => setTimeout(r, 1500 * (round + 1)));
   }
-  throw lastErr;
+  throw new AiBusyError("The AI service is busy right now. Please try again in a minute.");
 }
 
 function parse(text: string): Extracted {

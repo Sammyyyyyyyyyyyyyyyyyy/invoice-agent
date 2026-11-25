@@ -71,19 +71,32 @@ async function ensureBucket() {
   if (!data) await db.storage.createBucket(BUCKET, { public: false });
 }
 
-export async function saveFile(runId: string, buf: Buffer, contentType: string) {
+export async function saveFile(path: string, buf: Buffer, contentType: string) {
   await ensureBucket();
-  const { error } = await client().storage.from(BUCKET).upload(runId, buf, { contentType, upsert: true });
+  const { error } = await client().storage.from(BUCKET).upload(path, buf, { contentType, upsert: true });
   if (error) throw new Error(error.message);
 }
 
-export async function fileUrl(runId: string): Promise<string | null> {
-  const { data } = await client().storage.from(BUCKET).createSignedUrl(runId, 60 * 60);
+export async function fileUrl(path: string): Promise<string | null> {
+  const { data } = await client().storage.from(BUCKET).createSignedUrl(path, 60 * 60);
   return data?.signedUrl ?? null;
+}
+
+/** Uploaded files, newest first. Path format: uploads/<timestamp>__<name> */
+export async function listUploads(limit = 8) {
+  await ensureBucket();
+  const { data } = await client().storage.from(BUCKET).list("uploads", { limit: 100, sortBy: { column: "name", order: "desc" } });
+  return (data ?? [])
+    .filter((f) => f.name.includes("__"))
+    .slice(0, limit)
+    .map((f) => {
+      const [ts, ...rest] = f.name.split("__");
+      return { path: "uploads/" + f.name, name: decodeURIComponent(rest.join("__")), uploaded_at: new Date(Number(ts)).toISOString() };
+    });
 }
 
 export async function clearFiles() {
   const db = client();
-  const { data } = await db.storage.from(BUCKET).list("", { limit: 1000 });
-  if (data?.length) await db.storage.from(BUCKET).remove(data.map((f) => f.name));
+  const { data } = await db.storage.from(BUCKET).list("uploads", { limit: 1000 });
+  if (data?.length) await db.storage.from(BUCKET).remove(data.map((f) => "uploads/" + f.name));
 }

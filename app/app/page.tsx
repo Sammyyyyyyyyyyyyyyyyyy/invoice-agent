@@ -114,7 +114,7 @@ export default function Home() {
       <div className="main">
         <header className="pagehead"><h1>{heads[0]}</h1><p>{heads[1]}</p></header>
         <div className="content">
-          {view === "process" && <Process key={session} onDone={refresh} />}
+          {view === "process" && <Process key={session} onDone={refresh} runs={runs} />}
           {view === "invoices" && <Invoices runs={runs} />}
           {view === "data" && <RefData />}
         </div>
@@ -163,7 +163,7 @@ type Live = {
   note: string | null; model: string | null; ms: number | null;
 };
 
-function Process({ onDone }: { onDone: () => void }) {
+function Process({ onDone, runs }: { onDone: () => void; runs: Run[] }) {
   const [live, setLive] = useState<Live | null>(null);
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
@@ -186,7 +186,7 @@ function Process({ onDone }: { onDone: () => void }) {
     process(f, undefined, { name });
   }
 
-  async function process(file: File, docUrl?: string, opts: { name?: string; sample?: boolean } = {}) {
+  async function process(file: File, docUrl?: string, opts: { name?: string; sample?: boolean; path?: string } = {}) {
     setBusy(true);
     setLive({
       file: opts.name ?? file.name, docUrl: docUrl ?? URL.createObjectURL(file), isImage: file.type.startsWith("image/"),
@@ -196,6 +196,7 @@ function Process({ onDone }: { onDone: () => void }) {
     fd.append("file", file);
     fd.append("name", opts.name ?? file.name);
     if (opts.sample) fd.append("sample", "1");
+    if (opts.path) fd.append("path", opts.path);
     try {
       const res = await fetch("/api/process", { method: "POST", body: fd });
       if (!res.body) throw new Error("No response from the server.");
@@ -216,6 +217,7 @@ function Process({ onDone }: { onDone: () => void }) {
             const n = { ...l, status: { ...l.status }, results: { ...l.results } };
             if (ev.type === "running") n.status[ev.key] = "running";
             if (ev.type === "note") n.note = ev.message;
+            if (ev.type === "saved") loadUploads();
             if (ev.type === "extracted") { n.extracted = ev.extracted; n.model = ev.model; n.ms = ev.ms; n.note = null; }
             if (ev.type === "stage") { n.status[ev.stage.key] = ev.stage.status; n.results[ev.stage.key] = ev.stage; }
             if (ev.type === "done") n.run = ev.run;
@@ -229,6 +231,21 @@ function Process({ onDone }: { onDone: () => void }) {
     }
     setBusy(false);
     onDone();
+    loadUploads();
+  }
+
+  const [uploads, setUploads] = useState<{ path: string; name: string; uploaded_at: string }[]>([]);
+  const loadUploads = useCallback(() => {
+    fetch("/api/uploads").then((r) => r.json()).then((d) => setUploads(d.uploads ?? [])).catch(() => {});
+  }, []);
+  useEffect(() => { loadUploads(); }, [loadUploads]);
+
+  async function runUpload(u: { path: string; name: string }) {
+    const res = await fetch("/api/file?path=" + encodeURIComponent(u.path));
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const f = new File([blob], u.name, { type: blob.type || "application/pdf" });
+    process(f, undefined, { name: u.name, path: u.path });
   }
 
   async function runSample(f: string) {
@@ -248,6 +265,20 @@ function Process({ onDone }: { onDone: () => void }) {
             <input type="file" accept="application/pdf,image/*" hidden disabled={busy}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) choose(f); e.target.value = ""; }} />
           </label>
+          {uploads.length > 0 && (
+            <div className="group">
+              <h3>Recent uploads</h3>
+              {uploads.map((u) => {
+                const r = runs.find((x) => (x.extracted as any)?.file_path === u.path);
+                return (
+                  <button key={u.path} className={"sample" + (live?.file === u.name ? " on" : "")} disabled={busy} onClick={() => runUpload(u)}>
+                    <b>{u.name.replace(/\.[^.]+$/, "")}</b>
+                    <span>{r ? `${r.vendor_name ?? "Uploaded invoice"} · ${TITLE[r.decision]}` : "Not checked yet"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {SAMPLE_GROUPS.map((g) => (
             <div className="group" key={g.title}>
               <h3>{g.title}</h3>
@@ -472,7 +503,8 @@ function Drawer({ run, onClose }: { run: Run; onClose: () => void }) {
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [onClose]);
-  const url = !run.file_name ? undefined : SAMPLE_FILES.has(run.file_name) ? "/samples/" + run.file_name : "/api/file?id=" + run.id;
+  const fp = (run.extracted as any)?.file_path as string | undefined;
+  const url = run.file_name && SAMPLE_FILES.has(run.file_name) ? "/samples/" + run.file_name : fp ? "/api/file?path=" + encodeURIComponent(fp) : undefined;
   return (
     <>
       <div className="scrim" onClick={onClose} />

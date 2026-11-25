@@ -21,7 +21,7 @@ const SAMPLES = [
 ];
 
 const inr = (n: number | null | undefined) =>
-  n === null || n === undefined ? "—" : "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  n === null || n === undefined ? "—" : "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
 const icon = (s: string) => ({ pass: "✓", warn: "!", fail: "✕", skip: "–", running: "…" } as Record<string, string>)[s] ?? "";
 const statusWord = (s: string) => ({ pass: "passed", warn: "needs attention", fail: "failed", skip: "skipped", running: "running" } as Record<string, string>)[s] ?? "";
 const REJECT_TAGS = ["Invalid vendor", "Duplicate invoice"];

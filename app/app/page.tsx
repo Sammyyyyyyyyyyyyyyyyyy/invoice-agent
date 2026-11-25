@@ -78,6 +78,12 @@ export default function Home() {
     if (r?.names) setNames(r.names);
   }
 
+  // A browser refresh on the workspace returns to the home page.
+  useEffect(() => {
+    const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (nav?.type === "reload") window.location.replace("/");
+  }, []);
+
   const refresh = useCallback(async () => {
     const r = await fetch("/api/runs").then((x) => x.json()).catch(() => ({ runs: [] }));
     setRuns(r.runs ?? []);
